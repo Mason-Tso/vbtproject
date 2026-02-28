@@ -26,11 +26,27 @@ float linearZFiltered = 0;
 float alpha = 0.1;   // Acceleration smoothing factor
 // ========================
 
+// ========================
+// Velocity Variables
+// ========================
+float velocity = 0;
+float prevVelocity = 0;
+float zeroCrossThreshold = 0.05;   // TUNE: 0.05–0.1
+// ========================
+
+// ========================
+// ADDED: STILLNESS ZUPT VARIABLES (TUNE THESE)
+// ========================
+float accelStillThreshold = 0.05;    // m/s²
+int stillTimeRequired = 150;         // ms
+
+unsigned long stillStartTime = 0;
+// ========================
+
 void setup() {
   Serial.begin(115200);
   while (!Serial);
 
-  // Start I2C
   Wire.begin();
   Wire.setClock(400000);
 
@@ -41,7 +57,6 @@ void setup() {
     delay(500);
   }
 
-  // Calibration flags
   Serial.println("Keep board completely still...");
   Serial.println("Calibrating gyro for 5 seconds...");
 
@@ -137,12 +152,51 @@ void loop() {
   // OUTPUT STARTS HERE
   // ========================
 
-  float linearZ =  9.81 - az_world;
+  float linearZ = 9.81 - az_world;
 
-  //EMA Filtering
-  // ========================
+  // EMA filtering
   linearZFiltered += alpha * (linearZ - linearZFiltered);
-  // ========================
 
-  Serial.println(linearZFiltered);
+  // Save previous velocity
+  prevVelocity = velocity;
+
+  // Integrate acceleration
+  velocity += linearZFiltered * dt;
+
+  // ----------------------------
+  // ZERO-CROSSING ZUPT
+  // ----------------------------
+
+  // Bottom detection (negative → positive)
+  if (prevVelocity < -zeroCrossThreshold && velocity >= 0) {
+    velocity = 0;
+    Serial.println("BOTTOM");
+  }
+
+  // Top detection (positive → negative)
+  if (prevVelocity > zeroCrossThreshold && velocity <= 0) {
+    velocity = 0;
+    Serial.println("TOP");
+  }
+
+  // ----------------------------
+  // ADDED: STILLNESS-BASED ZUPT
+  // ----------------------------
+
+  if (abs(linearZFiltered) < accelStillThreshold)
+   {
+
+    if (stillStartTime == 0)
+      stillStartTime = millis();
+
+    if (millis() - stillStartTime > stillTimeRequired) {
+      velocity = 0;
+      Serial.println("STILL ZUPT");
+    }
+
+  } else {
+    stillStartTime = 0;
+  }
+
+  Serial.println(velocity);
 }
