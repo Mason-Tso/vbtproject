@@ -137,7 +137,7 @@ void loop() {
   // OUTPUT STARTS HERE
   // ========================
 
-  float linearZ =  9.81 - az_world);
+  float linearZ =  9.81 - az_world;
 
   //EMA Filtering
   // ========================
