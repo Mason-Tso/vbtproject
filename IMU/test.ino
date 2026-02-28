@@ -7,7 +7,9 @@
 ICM_20948_I2C imu;
 Adafruit_Madgwick filter;
 
+// ========================
 // Gyro bias
+// ========================
 float gyroBiasX = 0;
 float gyroBiasY = 0;
 float gyroBiasZ = 0;
@@ -31,17 +33,38 @@ float alpha = 0.1;   // Acceleration smoothing factor
 // ========================
 float velocity = 0;
 float prevVelocity = 0;
-float zeroCrossThreshold = 0.05;   // TUNE: 0.05–0.1
 // ========================
 
 // ========================
-// ADDED: STILLNESS ZUPT VARIABLES (TUNE THESE)
+// STILLNESS ZUPT VARIABLES (TOP RESET)
 // ========================
-float accelStillThreshold = 0.05;    // m/s²
-int stillTimeRequired = 150;         // ms
-
+float accelStillThreshold = 0.15;    // m/s²
+int stillTimeRequired = 100;         // ms
 unsigned long stillStartTime = 0;
 // ========================
+
+
+// ======================================================
+// ===== ADDED FOR HYBRID BOTTOM DETECTION (OPTION 4) ====
+// ======================================================
+
+// Movement states
+enum MovementState {
+  STATE_IDLE,
+  STATE_DESCENT,
+  STATE_CONCENTRIC
+};
+
+MovementState state = STATE_IDLE;
+
+// Thresholds (TUNE THESE)
+float descentThreshold = 0.05;       // detect downward motion
+float smallVelBand = 0.02;           // near-zero band
+float accelUpThreshold = 1.0;        // upward accel needed
+float concentricLockoutVel = 0.1;    // hysteresis lockout
+
+// ======================================================
+
 
 void setup() {
   Serial.begin(115200);
@@ -149,7 +172,7 @@ void loop() {
   }
 
   // ========================
-  // OUTPUT STARTS HERE
+  // LINEAR ACCELERATION
   // ========================
 
   float linearZ = 9.81 - az_world;
@@ -163,35 +186,75 @@ void loop() {
   // Integrate acceleration
   velocity += linearZFiltered * dt;
 
-  // ----------------------------
-  // ZERO-CROSSING ZUPT
-  // ----------------------------
 
-  // Bottom detection (negative → positive)
-  if (prevVelocity < -zeroCrossThreshold && velocity >= 0) {
-    velocity = 0;
-    Serial.println("BOTTOM");
+  // ======================================================
+  // ===== HYBRID BOTTOM DETECTION STATE MACHINE ==========
+  // ======================================================
+
+  switch(state) {
+
+    case STATE_IDLE:
+
+      // Detect start of descent
+      if (velocity < -descentThreshold) {
+        state = STATE_DESCENT;
+      }
+
+      break;
+
+
+    case STATE_DESCENT:
+
+      // Hybrid bottom detection:
+      // 1) Was descending
+      // 2) Velocity near zero
+      // 3) Strong upward acceleration
+
+      if (
+        prevVelocity < -descentThreshold &&
+        velocity >= -smallVelBand &&
+        linearZFiltered > accelUpThreshold
+      ) {
+        velocity = 0;                 // HARD CLAMP
+        state = STATE_CONCENTRIC;
+
+        Serial.println("BOTTOM (HYBRID)");
+      }
+
+      break;
+
+
+    case STATE_CONCENTRIC:
+
+      // Hysteresis lockout
+      // Prevents bounce re-triggering
+
+      if (velocity > concentricLockoutVel) {
+        // solid upward motion confirmed
+      }
+
+      // Detect next descent
+      if (velocity < -descentThreshold) {
+        state = STATE_DESCENT;
+      }
+
+      break;
   }
 
-  // Top detection (positive → negative)
-  if (prevVelocity > zeroCrossThreshold && velocity <= 0) {
-    velocity = 0;
-    Serial.println("TOP");
-  }
 
-  // ----------------------------
-  // ADDED: STILLNESS-BASED ZUPT
-  // ----------------------------
+  // ======================================================
+  // STILLNESS-BASED ZUPT (TOP RESET)
+  // ======================================================
 
-  if (abs(linearZFiltered) < accelStillThreshold)
-   {
+  if (abs(linearZFiltered) < accelStillThreshold) {
 
     if (stillStartTime == 0)
       stillStartTime = millis();
 
     if (millis() - stillStartTime > stillTimeRequired) {
       velocity = 0;
-      Serial.println("STILL ZUPT");
+      state = STATE_IDLE;   // Reset to idle at top
+      Serial.println("STILL ZUPT (TOP)");
     }
 
   } else {
