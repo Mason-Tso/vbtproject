@@ -56,7 +56,6 @@ float accelThreshold = 0.6;     // reversal acceleration magnitude
 
 void setup() {
   Serial.begin(115200);
-  while (!Serial);
 
   Wire.begin();
   Wire.setClock(400000);
