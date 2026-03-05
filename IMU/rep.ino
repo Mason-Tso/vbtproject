@@ -42,8 +42,15 @@ enum State { SEARCH_BOTTOM, SEARCH_TOP };
 State currentState = SEARCH_BOTTOM; 
 
 int repCount = 0;
-float currentROMGate = 0.25; 
-float velocityDeadzone = 0.05; // Soft crossing threshold (m/s)
+float currentROMGate = 0.10; 
+float velocityDeadzone = 0.02; // Soft crossing threshold (m/s)
+float prevVelocity = 0;
+// Direction confirmation counters
+int positiveCount = 0;
+int negativeCount = 0;
+int confirmSamples = 3;   // require 3 consecutive samples
+bool wasDescending = false;
+bool wasAscending = false;
 
 void setup() {
   Serial.begin(115200);
@@ -158,38 +165,76 @@ void loop() {
   velocity *= velDecay; // Bleed off drift
   position += velocity * dt;
 
-  // ================================================================
-  // ===                 PHASE 5: SOFT-CROSSING TOGGLE            ===
-  // ================================================================
+// ================================================================
+// ===                 PHASE 5: EXTREMA DETECTION                ===
+// ================================================================
 
-  if (currentState == SEARCH_BOTTOM) {
-    // Condition: Traveled down past gate AND velocity is no longer significantly negative
-    if (position < -currentROMGate && velocity > -velocityDeadzone) {
-      Serial.print("--- BOTTOM DETECTED --- Distance: "); Serial.println(abs(position));
-      
-      velocity = 0; // ZUPT
-      position = 0; 
-      currentState = SEARCH_TOP;
-    }
-  } 
+// --- Direction Classification ---
+if (velocity < -velocityDeadzone) {
+  wasDescending = true;
+}
 
-  else if (currentState == SEARCH_TOP) {
-    // Condition: Traveled up past gate AND velocity is no longer significantly positive
-    if (position > currentROMGate && velocity < velocityDeadzone) {
-      repCount++;
-      float finalROM = abs(position);
+if (velocity > velocityDeadzone) {
+  wasAscending = true;
+}
 
-      // Calibrate Gate after Rep 1
-      if (repCount == 1) { 
-        currentROMGate = finalROM * 0.75; 
-        Serial.print("ROM Gate Calibrated to: "); Serial.println(currentROMGate);
-      }
+// ================================================================
+// SEARCHING FOR BOTTOM
+// ================================================================
+if (currentState == SEARCH_BOTTOM) {
 
-      Serial.print("--- TOP DETECTED --- Rep: "); Serial.print(repCount);
-    
-      velocity = 0; // ZUPT
-      position = 0;
-      currentState = SEARCH_BOTTOM;
-    }
+  if (position < -currentROMGate &&
+      wasDescending &&
+      velocity > velocityDeadzone) {
+
+    Serial.print("--- BOTTOM DETECTED --- Distance: ");
+    Serial.println(abs(position));
+
+    velocity = 0;
+    position = 0;
+
+    wasDescending = false;
+    wasAscending = false;
+
+    currentState = SEARCH_TOP;
   }
+}
+
+// ================================================================
+// SEARCHING FOR TOP
+// ================================================================
+else if (currentState == SEARCH_TOP) {
+
+  if (position > currentROMGate &&
+      wasAscending &&
+      velocity < -velocityDeadzone) {
+
+    repCount++;
+    float finalROM = abs(position);
+
+    if (repCount == 1) {
+      currentROMGate = finalROM * 0.75;
+      // Serial.print("ROM Gate Calibrated to: ");
+      // Serial.println(currentROMGate);
+    }
+
+    Serial.print("--- TOP DETECTED --- Rep: ");
+    Serial.println(repCount);
+
+    velocity = 0;
+    position = 0;
+
+    wasDescending = false;
+    wasAscending = false;
+
+    currentState = SEARCH_BOTTOM;
+  }
+Serial.print(millis());
+Serial.print(",");
+Serial.print(linearZFiltered);
+Serial.print(",");
+Serial.print(velocity);
+Serial.print(",");
+Serial.println(position);
+}
 }
