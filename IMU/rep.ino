@@ -19,45 +19,44 @@ int sampleCount = 0;
 
 bool calibrated = false;
 bool orientationReady = false;
+bool gravityCalibrated = false;
 
+float gravityAccum = 0;
+int gravitySampleCount = 0;
+
+unsigned long gravityCalStart = 0;
 unsigned long startCalTime;
+unsigned long lastTime;
 unsigned long stableStart = 0;
-unsigned long lastTime = 0;
 
 // ========================
 // Filtering
 // ========================
-float linearZFiltered = 0;
-float alpha = 0.3;
+static float linearZFiltered = 0;
+float alpha = 0.15;
 
 // ========================
-// Integration
+// Velocity
 // ========================
 float velocity = 0;
-float prevVelocity = 0;
+// ========================
+// Position
+// ========================
 float position = 0;
 
-// Track local extrema
-float currentMinPos = 0;
-float currentMaxPos = 0;
-float positionTolerance = 0.003;   // 3mm tolerance
+// ========================
+// Movement Status Variables
+// ========================
 
 // ========================
-// Accel Reversal Detection
+// Rep Thresholds
 // ========================
-float accelThreshold = 0.35;
-int confirmSamples = 5;
 
-int positiveCount = 0;
-int negativeCount = 0;
-
-bool wasDescending = false;
-bool wasAscending  = false;
 
 void setup() {
 
   Serial.begin(115200);
-  delay(1000);
+  while (!Serial);
 
   Wire.begin();
   Wire.setClock(400000);
@@ -69,13 +68,13 @@ void setup() {
     delay(500);
   }
 
-  Serial.println("Keep board still...");
-  Serial.println("Calibrating for 5 seconds...");
+  Serial.println("Keep board completely still...");
+  Serial.println("Calibrating gyro for 5 seconds...");
 
   startCalTime = millis();
 
   filter.begin(100);
-  filter.setBeta(0.1);
+  filter.setBeta(0.15);
 }
 
 void loop() {
@@ -84,7 +83,7 @@ void loop() {
   imu.getAGMT();
 
   // ========================
-  // CALIBRATION
+  // PHASE 1: GYRO CALIBRATION
   // ========================
   if (!calibrated) {
 
@@ -110,21 +109,11 @@ void loop() {
       gyroBiasY /= sampleCount;
       gyroBiasZ /= sampleCount;
 
-      float qw, qx, qy, qz;
-      filter.getQuaternion(&qw, &qx, &qy, &qz);
-
-      restingGravity =
-        (2*qx*qz - 2*qw*qy) * ax +
-        (2*qy*qz + 2*qw*qx) * ay +
-        (1 - 2*qx*qx - 2*qy*qy) * az;
-
       calibrated = true;
       lastTime = micros();
 
-      currentMinPos = position;
-      currentMaxPos = position;
-
-      Serial.println("Calibration complete.");
+      Serial.println("Gyro calibration complete.");
+      Serial.println("Waiting for orientation lock...");
     }
 
     return;
@@ -159,20 +148,20 @@ void loop() {
     (1 - 2*qx*qx - 2*qy*qy) * az;
 
   // ========================
-  // ORIENTATION LOCK
+  // PHASE 2: ORIENTATION LOCK
   // ========================
   if (!orientationReady) {
 
-    if (abs(az_world - restingGravity) < 0.2) {
+    float accelMag = sqrt(ax*ax + ay*ay + az*az);
 
+    if (abs(accelMag - 9.81) < 0.4) {
       if (stableStart == 0)
         stableStart = millis();
 
-      if (millis() - stableStart > 300) {
+      if (millis() - stableStart > 500) {
         orientationReady = true;
-        Serial.println("System ready.");
+        Serial.println("Orientation locked. Sampling resting gravity...");
       }
-
     } else {
       stableStart = 0;
     }
@@ -181,72 +170,51 @@ void loop() {
   }
 
   // ========================
-  // LINEAR ACCELERATION
+  // PHASE 3: GRAVITY SAMPLE
   // ========================
-  float linearZ = restingGravity - az_world;
+  if (!gravityCalibrated) {
+
+    if (gravityCalStart == 0)
+      gravityCalStart = millis();
+
+    gravityAccum += az_world;
+    gravitySampleCount++;
+
+    if (millis() - gravityCalStart >= 1000) {
+
+      restingGravity = gravityAccum / gravitySampleCount;
+      gravityCalibrated = true;
+
+      Serial.println("System ready.");
+      Serial.print("Resting gravity: ");
+      Serial.println(restingGravity);
+    }
+
+    return;
+  }
+
+  // ========================
+  // PHASE 4: LINEAR ACCELERATION
+  // ========================
+  float linearZ =  az_world - restingGravity;
+
   linearZFiltered += alpha * (linearZ - linearZFiltered);
 
-  // ========================
-  // INTEGRATION
-  // ========================
-  prevVelocity = velocity;
-  velocity += linearZFiltered * dt;
-  position += velocity * dt;
+ // ========================
+// VELOCITY INTEGRATION
+// ========================
+velocity += linearZFiltered * dt;
 
-  // Track extrema
-  if (position < currentMinPos) currentMinPos = position;
-  if (position > currentMaxPos) currentMaxPos = position;
+// ========================
+// POSITION INTEGRATION
+// ========================
+position += velocity * dt;
 
-  // ========================
-  // ACCEL SIGN TRACKING
-  // ========================
-  if (linearZFiltered > accelThreshold) {
-    positiveCount++;
-    negativeCount = 0;
-  }
-  else if (linearZFiltered < -accelThreshold) {
-    negativeCount++;
-    positiveCount = 0;
-  }
-  else {
-    positiveCount = 0;
-    negativeCount = 0;
-  }
 
-  // ========================
-  // BOTTOM DETECTION
-  // ========================
-  if (negativeCount >= confirmSamples) {
-    wasDescending = true;
-  }
 
-  if (wasDescending &&
-      positiveCount >= confirmSamples &&
-      abs(position - currentMinPos) < positionTolerance) {
 
-      Serial.println("BOTTOM DETECTED");
+// ========================
+// REP LOGIC STARTS
+// ========================
 
-      wasDescending = false;
-      currentMaxPos = position;  // reset max for next phase
-  }
-
-  // ========================
-  // TOP DETECTION
-  // ========================
-  if (positiveCount >= confirmSamples) {
-    wasAscending = true;
-  }
-
-  if (wasAscending &&
-      negativeCount >= confirmSamples &&
-      abs(position - currentMaxPos) < positionTolerance) {
-
-      Serial.println("TOP DETECTED");
-
-      wasAscending = false;
-      currentMinPos = position;  // reset min for next phase
-  }
-
-  // Optional debug
-  // Serial.println(position);
 }
