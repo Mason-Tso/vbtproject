@@ -41,16 +41,11 @@ float position = 0;
 enum State { SEARCH_BOTTOM, SEARCH_TOP };
 State currentState = SEARCH_BOTTOM; 
 
-int repCount = 0;
-float currentROMGate = 0.10; 
-float velocityDeadzone = 0.02; // Soft crossing threshold (m/s)
-float prevVelocity = 0;
-// Direction confirmation counters
-int positiveCount = 0;
-int negativeCount = 0;
-int confirmSamples = 3;   // require 3 consecutive samples
-bool wasDescending = false;
-bool wasAscending = false;
+int repCount = 0;              // used at TOP detection
+float currentROMGate = 0.10;   // displacement gate
+float velocityDeadzone = 0.03; // direction classification threshold
+bool wasDescending = false;    // required for bottom detection
+bool wasAscending = false;     // required for top detection
 
 void setup() {
   Serial.begin(115200);
@@ -212,11 +207,7 @@ else if (currentState == SEARCH_TOP) {
     repCount++;
     float finalROM = abs(position);
 
-    if (repCount == 1) {
-      currentROMGate = finalROM * 0.75;
-      // Serial.print("ROM Gate Calibrated to: ");
-      // Serial.println(currentROMGate);
-    }
+    currentROMGate = finalROM * 0.8; // change ROM gate based on previous rep
 
     Serial.print("--- TOP DETECTED --- Rep: ");
     Serial.println(repCount);
@@ -229,6 +220,7 @@ else if (currentState == SEARCH_TOP) {
 
     currentState = SEARCH_BOTTOM;
   }
+}
 Serial.print(millis());
 Serial.print(",");
 Serial.print(linearZFiltered);
@@ -236,5 +228,4 @@ Serial.print(",");
 Serial.print(velocity);
 Serial.print(",");
 Serial.println(position);
-}
 }
