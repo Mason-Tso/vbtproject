@@ -57,6 +57,7 @@ bool bufferFull = false;
 
 const float LINZ_VAR_THRESH = 0.0025;
 const float GYRO_VAR_THRESH = 0.000225;
+unsigned long stillStart = 0;
 
 // ==========================
 // VELOCITY
@@ -75,11 +76,11 @@ float prevVelocityZ = 0;
 // ==========================
 float v0 = 0, v1 = 0, v2 = 0;
 
-const float b0 = 0.0009446918;
-const float b1 = 0.0018893836;
-const float b2 = 0.0009446918;
-const float a1 = -1.911197;
-const float a2 = 0.9149758;
+const float b0 = 0.0028981946;
+const float b1 = 0.0057963892;
+const float b2 = 0.0028981946;
+const float a1 = -1.8226949;
+const float a2 = 0.8371817;
 
 // ==========================
 // SETUP
@@ -293,14 +294,32 @@ void loop() {
   updateStillnessBuffers(linearZ, gyroMag);
 
   bool systemStill = false;
+  
 
   if (bufferFull) {
     float linZVar = computeVariance(linZBuffer);
     float gyroVar = computeVariance(gyroBuffer);
 
-    systemStill = (linZVar < LINZ_VAR_THRESH) &&
-                  (gyroVar < GYRO_VAR_THRESH) &&
-                  (abs(linearZ) < 0.2);
+    bool stillCandidate = (linZVar < LINZ_VAR_THRESH) &&
+                          (gyroVar < GYRO_VAR_THRESH) &&
+                          (abs(linearZ) < 0.2);
+
+    if (stillCandidate) {
+      if (stillStart == 0) stillStart = millis();
+
+      if (millis() - stillStart > 50) {  // 👈 tune this (50–120 ms)
+        systemStill = true;
+      }
+    } else {
+      stillStart = 0;
+    }
+  }
+
+  // --------------------------
+  // CONTINUOUS GRAVITY CORRECTION
+  // --------------------------
+  if (systemStill) {
+    restingGravity = 0.9995 * restingGravity + 0.0005 * az_world;
   }
 
   float velocityFiltered = 0;
@@ -312,7 +331,6 @@ void loop() {
     velocityZ = 0;
     prevLinearZ = 0;
     v0 = v1 = v2 = 0;
-    positionZ = 0;
     prevVelocityZ = 0;
   } else {
     velocityZ += 0.5 * (prevLinearZ + linearZ) * dt;
@@ -327,7 +345,7 @@ void loop() {
   // --------------------------
   // DEADBAND
   // --------------------------
-  if (abs(velocityFiltered) < 0.03) {
+  if (systemStill && abs(velocityFiltered) < 0.04) {
     velocityFiltered = 0;
   }
 
